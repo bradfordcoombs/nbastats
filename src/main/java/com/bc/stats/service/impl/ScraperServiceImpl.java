@@ -15,9 +15,13 @@ import java.util.List;
 import javax.annotation.Resource;
 
 import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.message.BasicNameValuePair;
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.jsoup.Jsoup;
@@ -31,7 +35,6 @@ import com.bc.stats.domain.CombineResults;
 import com.bc.stats.domain.Player;
 import com.bc.stats.domain.builder.CombineResultsBuilder;
 import com.bc.stats.domain.builder.PlayerBuilder;
-import com.bc.stats.domain.json.PlayerJsonObject;
 import com.bc.stats.domain.repository.CombineResultsRepository;
 import com.bc.stats.domain.repository.PlayerRepository;
 import com.bc.stats.service.ScraperService;
@@ -60,7 +63,6 @@ public class ScraperServiceImpl implements ScraperService {
 
    @Override
    public void scrapeNbaDotComPlayerProfiles() {
-      List<PlayerJsonObject> players = new ArrayList<PlayerJsonObject>();
       String url = "http://stats.nba.com/stats/commonallplayers/?LeagueID=00&Season=2013-14&IsOnlyCurrentSeason=0";
       CloseableHttpClient client = HttpClientBuilder.create().build();
       HttpGet getRequest = new HttpGet(url);
@@ -75,49 +77,85 @@ public class ScraperServiceImpl implements ScraperService {
          ObjectMapper mapper = new ObjectMapper();
          String line = new BufferedReader(new InputStreamReader(response.getEntity().getContent())).readLine();
          JsonNode node = mapper.readTree(line).get("resultSets").findValue("rowSet");
-         node.getElements().forEachRemaining(playerNode -> players.add(processPlayerNode(playerNode)));
+         node.getElements().forEachRemaining(playerNode -> processPlayer(playerNode));
          client.close();
       }
       catch(IOException e) {
          e.printStackTrace();
       }
-
-      players.forEach(player -> processPlayerLink(player));
    }
 
-   private PlayerJsonObject processPlayerNode(JsonNode node) {
-      PlayerJsonObject player = new PlayerJsonObject();
-      player.setNbaDotComId(node.get(0).asLong());
-      player.setName(node.get(1).asText());
-      player.setIsActive(node.get(2).asBoolean());
-      player.setFromYear(node.get(3).asLong());
-      player.setToYear(node.get(4).asLong());
-      return player;
-   }
+   private Player processPlayer(JsonNode node) {
+      Long nbaDotComId = node.get(0).asLong();
+      String[] name = node.get(1).asText().split(",");
+      String firstName = StringUtil.getSafeArrayValue(name, 1).trim();
+      String lastName = StringUtil.getSafeArrayValue(name, 0).trim();
+      boolean isActive = node.get(2).asBoolean();
+      Long fromYear = node.get(3).asLong();
+      Long toYear = node.get(4).asLong();
 
-   private void processPlayerLink(Element link) {
+      LocalDate birthDate = null;
+      String college = "";
+      Long height = null;
+      Long weight = null;
+      String dateDraftedString = "";
+      LocalDate dateDrafted = null;
+
       try {
-         // String href = link.attr("href");
-         String absURL = link.absUrl("href");
-         String[] name = link.text().split(",");
-         String firstName = StringUtil.getSafeArrayValue(name, 1);
-         String lastName = StringUtil.getSafeArrayValue(name, 0);
-         Document doc = Jsoup.connect(absURL).get();
-         String birthDateString = doc.getElementsByAttributeValue("itemprop", "birthDate").text();
-         LocalDate birthDate = LocalDate.parse(birthDateString, DateTimeFormatter.ofPattern("MMMM d, yyyy"));
-         String college = doc.select(".nbaStats span:contains(From) ~ .nbaStatsText").text();
-         Long height = calculateSizeInInches(doc.select(".nbaVitalsTitle:contains(Height) ~ span.nbaHeight").text());
-         Long weight = Long.parseLong(doc.select(".nbaVitalsTitle:contains(Weight) ~ span.nbaHeight").text());
-         String dateDraftedString = doc.select(".nbaStats span:contains(Draft) ~ .nbaStatsText").text();
-         LocalDate dateDrafted = StringUtil.equalsValueOrNullIgnoreCase(dateDraftedString, "undrafted") ? null : LocalDate.parse(dateDraftedString);
+         if(isActive) {
+            String url = "http://www.nba.com/" + "playerfile/" + firstName.toLowerCase() + "_" + lastName.toLowerCase();
+            Document doc = Jsoup.connect(url).get();
 
-         Player player =
-               new PlayerBuilder().firstName(firstName).lastName(lastName).birthDate(birthDate).college(college).heightInInches(height).weightInPounds(weight).dateDrafted(dateDrafted).build();
-         playerRepository.save(player);
+            String birthDateString = doc.getElementsByAttributeValue("itemprop", "birthDate").text();
+            birthDate = LocalDate.parse(birthDateString, DateTimeFormatter.ofPattern("MMMM d, yyyy"));
+            college = doc.select(".nbaStats span:contains(From) ~ .nbaStatsText").text();
+            height = calculateSizeInInches(doc.select(".nbaVitalsTitle:contains(Height) ~ span.nbaHeight").text());
+            weight = calculateWeight(doc.select(".nbaVitalsTitle:contains(Weight) ~ span.nbaHeight").text());
+            dateDraftedString = doc.select(".nbaStats span:contains(Draft) ~ .nbaStatsText").text();
+            dateDrafted = StringUtil.equalsValueOrNullIgnoreCase(dateDraftedString, "undrafted") ? null : LocalDate.parse(dateDraftedString);
+         }
+         else {
+            String url = "http://stats.nba.com/stats/commonplayerinfo/?PlayerID=76001&SeasonType=Regular+Season&LeagueID=00";
+            CloseableHttpClient client = HttpClientBuilder.create().build();
+            HttpPost postRequest = new HttpPost(url);
+            List<NameValuePair> params = new ArrayList<NameValuePair>();
+            params.add(new BasicNameValuePair("PlayerID", Long.toString(nbaDotComId)));
+            params.add(new BasicNameValuePair("SeasonType", "Regular+Season"));
+            params.add(new BasicNameValuePair("LeagueID", "00"));
+            postRequest.setEntity(new UrlEncodedFormEntity(params));
+            postRequest.setHeader("Content-Type", "application/json");
+            HttpResponse response = client.execute(postRequest);
+            if(response.getStatusLine().getStatusCode() != 200) {
+               throw new RuntimeException("Failed : HTTP Error Code : " + response.getStatusLine().getStatusCode() + " - " + response.getStatusLine().getReasonPhrase());
+            }
+
+            ObjectMapper mapper = new ObjectMapper();
+            String line = new BufferedReader(new InputStreamReader(response.getEntity().getContent())).readLine();
+            JsonNode node = mapper.readTree(line).get("resultSets").findValue("rowSet");
+            node.getElements().forEachRemaining(playerNode -> processPlayer(playerNode));
+            client.close();
+            Document doc = Jsoup.connect(url).get();
+            String birthDateString = doc.getElementById("born").text();
+            birthDate = LocalDate.parse(birthDateString, DateTimeFormatter.ofPattern("MMMM d, yyyy"));
+            college = doc.getElementById("college").text();
+            height = calculateSizeInInches(doc.getElementById("height").text());
+            weight = calculateWeight(doc.getElementById("weight").text());
+            // dateDraftedString = doc.select(".nbaStats span:contains(Draft) ~ .nbaStatsText").text();
+            // dateDrafted = StringUtil.equalsValueOrNullIgnoreCase(dateDraftedString, "undrafted") ? null :
+            // LocalDate.parse(dateDraftedString);
+         }
+
       }
       catch(IOException e) {
-
+         // TODO Auto-generated catch block
+         e.printStackTrace();
       }
+
+      Player player =
+            new PlayerBuilder().nbaDotComId(nbaDotComId).firstName(firstName).lastName(lastName).activeFrom(fromYear).activeTo(toYear).firstName(firstName).lastName(lastName).birthDate(birthDate)
+                  .college(college).heightInInches(height).weightInPounds(weight).dateDrafted(dateDrafted).build();
+
+      return player;
    }
 
    @Override
@@ -182,6 +220,11 @@ public class ScraperServiceImpl implements ScraperService {
       Long inches = StringUtil.safeConvertStringArrayToLong(heightSplit, 1);
       Long heightInInches = (12 * feet) + inches;
       return heightInInches;
+   }
+
+   private Long calculateWeight(String weight) {
+      String[] weightSplit = weight.split(" ");
+      return Long.parseLong(weightSplit[0]);
    }
 
    private Double parseDouble(String stringValue) {

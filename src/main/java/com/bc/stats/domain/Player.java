@@ -43,6 +43,10 @@ public class Player {
 
    private LocalDate dateDrafted;
 
+   private Long activeFrom;
+
+   private Long activeTo;
+
    @OneToOne
    @JoinColumn(name = "combine_result_id", referencedColumnName = "id", insertable = false, updatable = false)
    @Fetch(FetchMode.JOIN)
@@ -59,6 +63,8 @@ public class Player {
       this.college = builder.getCollege();
       this.position = builder.getPosition();
       this.dateDrafted = builder.getDateDrafted();
+      this.activeFrom = builder.getActiveFrom();
+      this.activeTo = builder.getActiveTo();
       this.combineAnthropometricResult = builder.getCombineAnthropometricResult();
    }
 

@@ -33,6 +33,10 @@ public class PlayerBuilder {
 
    private LocalDate dateDrafted;
 
+   private Long activeFrom;
+
+   private Long activeTo;
+
    private CombineResults combineAnthropometricResult;
 
    public PlayerBuilder espnDotComId(Long espnDotComId) {
@@ -123,6 +127,24 @@ public class PlayerBuilder {
 
    public LocalDate getDateDrafted() {
       return dateDrafted;
+   }
+
+   public PlayerBuilder activeFrom(Long activeFrom) {
+      this.activeFrom = activeFrom;
+      return this;
+   }
+
+   public Long getActiveFrom() {
+      return activeFrom;
+   }
+
+   public PlayerBuilder activeTo(Long activeTo) {
+      this.activeTo = activeTo;
+      return this;
+   }
+
+   public Long getActiveTo() {
+      return activeTo;
    }
 
    public PlayerBuilder combineAnthropometricResult(CombineResults combineAnthropometricResult) {
